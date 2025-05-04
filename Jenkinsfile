@@ -3,9 +3,9 @@ pipeline {
         label 'linux-py-docker'
     }
     environment {
-        SESSION_NAME = "ami-general-session"
-        REGION = "us-east-1"
-        BASE_AMI = "ami-01816d07b1128cd2d" // Moved to a constant for clarity
+        SESSION_NAME = 'ami-general-session'
+        REGION = 'us-east-1'
+        BASE_AMI = 'ami-02e3d076cbd5c28fa' // Moved to a constant for clarity
     }
     stages {
         stage('Setup Environment') {
@@ -59,14 +59,14 @@ pipeline {
                         def formattedKeyContent = PRIVATE_KEY_CONTENT.replace('|', '\n')
 
                         // Write the private key to a temporary file
-                        def tempKeyPath = "./temp_private_key.pem"
+                        def tempKeyPath = './temp_private_key.pem'
                         writeFile file: tempKeyPath, text: formattedKeyContent
                         sh "chmod 600 \"${tempKeyPath}\""
 
                         try {
                             // Run the Python script
                             sh """
-                            python3.12 -u ./create_ami.py \
+                            python3.12 -u ./create_ami_win.py \
                             --base_ami "${BASE_AMI}" \
                             --ami_name "jenkins-linux-py-docker-${BUILD_NUMBER}" \
                             --region "${REGION}" \

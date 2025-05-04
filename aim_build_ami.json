@@ -19,16 +19,25 @@
     },
     {
       "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeKeyPairs",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeVpcs"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
       "Action": ["iam:PassRole"],
       "Resource": "arn:aws:iam::*:role/jenkins_build_ami"
     },
     {
       "Effect": "Allow",
       "Action": [
-        "ec2:DescribeKeyPairs",
-        "ec2:DescribeSecurityGroups",
-        "ec2:DescribeSubnets",
-        "ec2:DescribeVpcs"
+        "ssm:DescribeInstanceInformation",
+        "ssm:SendCommand",
+        "ssm:GetCommandInvocation"
       ],
       "Resource": "*"
     }
