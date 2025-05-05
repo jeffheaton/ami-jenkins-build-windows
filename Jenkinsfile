@@ -5,7 +5,7 @@ pipeline {
     environment {
         SESSION_NAME = 'ami-general-session'
         REGION = 'us-east-1'
-        BASE_AMI = 'ami-02e3d076cbd5c28fa' // Moved to a constant for clarity
+        BASE_AMI = 'ami-001adaa5c3ee02e10' // Moved to a constant for clarity
     }
     stages {
         stage('Setup Environment') {
