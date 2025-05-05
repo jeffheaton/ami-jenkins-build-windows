@@ -73,7 +73,7 @@ def create_windows_ami(
         print("Launching Windows EC2 instance…")
         instance = ec2.create_instances(
             ImageId=base_ami,
-            IamInstanceProfile={"Name": "jenkins-role-build-ami-linux-general"},
+            IamInstanceProfile={"Name": "jenkins-ec2-ssm-instance-profile"},
             MinCount=1,
             MaxCount=1,
             InstanceType="t3.medium",
