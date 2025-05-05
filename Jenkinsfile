@@ -72,9 +72,7 @@ pipeline {
                             --region "${REGION}" \
                             --subnet_id "${SUBNET_ID}" \
                             --security_group "${SECURITY_GROUP_ID}" \
-                            --script_path "./init.ps1" \
-                            --key_name "jenkins-linux" \
-                            --key_path \"${tempKeyPath}\"
+                            --script_path "./init.ps1"
                             """
                         } finally {
                             // Clean up the temporary private key file
