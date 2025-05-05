@@ -4,7 +4,9 @@ import argparse
 import sys
 
 
-def wait_for_ssm(instance_id: str, ssm_client, retries: int = 30, delay: int = 10) -> None:
+def wait_for_ssm(
+    instance_id: str, ssm_client, retries: int = 30, delay: int = 10
+) -> None:
     """
     Polls until the SSM agent on the instance shows up in DescribeInstanceInformation.
     """
@@ -71,27 +73,34 @@ def create_windows_ami(
         print("Launching Windows EC2 instance…")
         instance = ec2.create_instances(
             ImageId=base_ami,
+            IamInstanceProfile={"Name": "jenkins-ec2-ssm-role"},
             MinCount=1,
             MaxCount=1,
             InstanceType="t3.medium",
-            NetworkInterfaces=[{
-                "SubnetId": subnet_id,
-                "DeviceIndex": 0,
-                "AssociatePublicIpAddress": False,
-                "Groups": [security_group],
-            }],
-            BlockDeviceMappings=[{
-                "DeviceName": "/dev/sda1",
-                "Ebs": {
-                    "VolumeSize": volume_size,
-                    "DeleteOnTermination": True,
-                    "VolumeType": "gp3",
-                },
-            }],
-            TagSpecifications=[{
-                "ResourceType": "instance",
-                "Tags": [{"Key": "Name", "Value": f"Temp-Windows-AMI-{ami_name}"}],
-            }],
+            NetworkInterfaces=[
+                {
+                    "SubnetId": subnet_id,
+                    "DeviceIndex": 0,
+                    "AssociatePublicIpAddress": False,
+                    "Groups": [security_group],
+                }
+            ],
+            BlockDeviceMappings=[
+                {
+                    "DeviceName": "/dev/sda1",
+                    "Ebs": {
+                        "VolumeSize": volume_size,
+                        "DeleteOnTermination": True,
+                        "VolumeType": "gp3",
+                    },
+                }
+            ],
+            TagSpecifications=[
+                {
+                    "ResourceType": "instance",
+                    "Tags": [{"Key": "Name", "Value": f"Temp-Windows-AMI-{ami_name}"}],
+                }
+            ],
             # Make sure this instance has an IAM role/profile with SSM permissions
         )[0]
 
@@ -170,5 +179,3 @@ if __name__ == "__main__":
         args.volume_size,
         args.script_path,
     )
-
-
