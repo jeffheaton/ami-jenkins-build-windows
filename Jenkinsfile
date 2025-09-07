@@ -4,7 +4,7 @@ pipeline {
     environment {
         SESSION_NAME     = 'ami-general-session'
         REGION           = 'us-east-1'
-        BASE_AMI         = 'ami-001adaa5c3ee02e10'  // Windows base AMI
+        BASE_AMI         = 'ami-0efee5160a1079475'  // Windows base AMI
         INSTANCE_PROFILE = 'SSMInstanceProfile'     // <-- no Jenkins credential needed
     }
 
