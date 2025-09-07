@@ -1,75 +1,72 @@
 pipeline {
-    agent { label 'aws-ec2-linux' }   // or whatever your Linux label is
-    options { timestamps() }
-
-    parameters {
-        string(name: 'BASE_AMI',          defaultValue: 'ami-xxxxxxxx',  description: 'Base Windows AMI')
-        string(name: 'AMI_NAME',          defaultValue: 'jenkins-win-worker', description: 'New AMI name')
-        string(name: 'REGION',            defaultValue: 'us-east-1',     description: 'AWS region')
-        string(name: 'SUBNET_ID',         defaultValue: 'subnet-xxxxxxxx', description: 'Subnet for builder')
-        string(name: 'SECURITY_GROUP_ID', defaultValue: 'sg-xxxxxxxx',   description: 'SG with egress to SSM')
-        string(name: 'INSTANCE_PROFILE',  defaultValue: 'SSMInstanceProfile', description: 'IAM instance profile name')
-        string(name: 'VOLUME_SIZE',       defaultValue: '80',            description: 'Root volume size (GiB)')
-    }
+    agent { label 'linux-py-docker' }
 
     environment {
-        AWS_DEFAULT_REGION = "${params.REGION}"
-        PYTHONUNBUFFERED   = '1'
+        SESSION_NAME = 'ami-general-session'
+        REGION       = 'us-east-1'
+        BASE_AMI     = 'ami-001adaa5c3ee02e10'   // Windows base AMI
+        AMI_NAME     = "jenkins-win-py-${env.BUILD_NUMBER}"
     }
 
     stages {
-        stage('Bootstrap Python') {
+        stage('Setup Environment') {
             steps {
                 sh '''
-          set -euxo pipefail
-
-          if ! python3 -m pip -V >/dev/null 2>&1; then
-            if command -v dnf >/dev/null 2>&1; then
-              sudo dnf -y install python3-pip
-            elif command -v yum >/dev/null 2>&1; then
-              sudo yum -y install python3-pip
-            elif command -v apt-get >/dev/null 2>&1; then
-              sudo apt-get update -y
-              sudo apt-get install -y python3-pip
-            else
-              curl -sS https://bootstrap.pypa.io/get-pip.py -o get-pip.py
-              python3 get-pip.py --user
-            fi
-          fi
-
-          python3 -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then
-            python3 -m pip install -r requirements.txt
-          else
-            python3 -m pip install boto3
-          fi
-
-          # quick sanity
-          python3 - <<'PY'
-import boto3, botocore, sys
-print("boto3 ok:", boto3.__version__)
-PY
-
-          # optional: show identity if awscli exists
-          if command -v aws >/dev/null 2>&1; then aws sts get-caller-identity || true; fi
-        '''
+                  set -euxo pipefail
+                  # Ensure boto3 available for the driver
+                  sudo pip3.12 install --upgrade pip boto3
+                '''
             }
         }
 
-        stage('Bake Windows AMI') {
+        stage('Assume AWS Role') {
             steps {
-                sh """
-          set -euxo pipefail
-          python3 create_ami_win.py \
-            --base_ami ${params.BASE_AMI} \
-            --ami_name ${params.AMI_NAME} \
-            --region ${params.REGION} \
-            --subnet_id ${params.SUBNET_ID} \
-            --security_group ${params.SECURITY_GROUP_ID} \
-            --volume_size ${params.VOLUME_SIZE} \
-            --script_path ./init.ps1 \
-            --iam_instance_profile_name ${params.INSTANCE_PROFILE}
-        """
+                withCredentials([
+                    string(credentialsId: 'jenkins-role-build-ami-linux-general', variable: 'ROLE_ARN') // your existing secret
+                ]) {
+                    script {
+                        def assumeRoleOutput = sh(
+                            script: """
+                              aws sts assume-role \
+                                --role-arn "$ROLE_ARN" \
+                                --role-session-name "$SESSION_NAME" \
+                                --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
+                                --output text
+                            """,
+                            returnStdout: true
+                        ).trim()
+                        if (!assumeRoleOutput) { error "Failed to assume role: $ROLE_ARN" }
+                        def creds = assumeRoleOutput.split()
+                        env.AWS_ACCESS_KEY_ID     = creds[0]
+                        env.AWS_SECRET_ACCESS_KEY = creds[1]
+                        env.AWS_SESSION_TOKEN     = creds[2]
+                    }
+                }
+            }
+        }
+
+        stage('Run Python Script') {
+            steps {
+                // No SSH key needed anymore (SSM). Keep your existing subnet/sg secrets.
+                withCredentials([
+                    string(credentialsId: 'private-subnet-id',          variable: 'SUBNET_ID'),
+                    string(credentialsId: 'ssh-security-group-id',      variable: 'SECURITY_GROUP_ID'),
+                    // New: instance profile name for the *builder* instance (create once in IAM)
+                    string(credentialsId: 'windows-ssm-instance-profile', variable: 'INSTANCE_PROFILE')
+                ]) {
+                    sh """
+                      set -euxo pipefail
+                      python3.12 -u ./create_ami_win.py \
+                        --base_ami "${BASE_AMI}" \
+                        --ami_name "${AMI_NAME}" \
+                        --region "${REGION}" \
+                        --subnet_id "${SUBNET_ID}" \
+                        --security_group "${SECURITY_GROUP_ID}" \
+                        --volume_size "80" \
+                        --script_path "./init.ps1" \
+                        --iam_instance_profile_name "${INSTANCE_PROFILE}"
+                    """
+                }
             }
         }
     }
