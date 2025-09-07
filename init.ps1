@@ -1,75 +1,101 @@
 <#
-  init.ps1  —  bootstrap a Windows Jenkins worker
-
-  Must run as Admin. Uses Chocolatey for package installs, pyenv-win
-  for Python version management, and configures Docker + build tools.
+  init.ps1 — bootstrap a Windows Jenkins worker (Python-first)
+  Run under SSM as Administrator. No reboots; Sysprep happens later.
 #>
 
-# 0) ensure running as Administrator
-If (-not ([Security.Principal.WindowsPrincipal]
+$ErrorActionPreference = 'Stop'
+
+# --- Helpers -----------------------------------------------------------------
+function Assert-Admin {
+  $isAdmin = ([Security.Principal.WindowsPrincipal]
     [Security.Principal.WindowsIdentity]::GetCurrent()
-    ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-  Write-Error "This script must be run as Administrator."
-  Exit 1
+  ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+  if (-not $isAdmin) { throw "This script must run as Administrator." }
 }
 
-# 1) Install Chocolatey if missing
+function Add-MachinePathSegment {
+  param([Parameter(Mandatory)][string]$Segment)
+  $segNorm = $Segment.TrimEnd('\')
+  $mPath   = [Environment]::GetEnvironmentVariable('Path','Machine')
+  if ($mPath -split ';' | Where-Object { $_.TrimEnd('\') -ieq $segNorm }) { return }
+  [Environment]::SetEnvironmentVariable('Path', "$mPath;$Segment", 'Machine')
+  $env:Path = "$env:Path;$Segment"   # update current process too
+}
+
+function Test-PendingReboot {
+  $keys = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending',
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired',
+    'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\PendingFileRenameOperations'
+  )
+  foreach ($k in $keys) { if (Test-Path $k) { return $true } }
+  return $false
+}
+
+Assert-Admin
+
+# --- Chocolatey --------------------------------------------------------------
 Set-ExecutionPolicy Bypass -Scope Process -Force
-If (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
-  Write-Host "Installing Chocolatey…"
+if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+  Write-Host "Installing Chocolatey..."
   [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-  iex ((New-Object Net.WebClient).DownloadString(
-    'https://community.chocolatey.org/install.ps1'))
-} Else {
+  iex ((New-Object Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+} else {
   Write-Host "Chocolatey already installed."
 }
+choco feature enable -n=allowGlobalConfirmation
 
-# Refresh the session’s PATH
-$env:Path = [Environment]::GetEnvironmentVariable("Path","Machine")
+# --- Core tooling (no Docker) -----------------------------------------------
+# Choose ONE JDK; using Amazon Corretto 17 to mirror Linux builds
+$packages = @(
+  'amazon-corretto17',
+  'git',
+  '7zip',
+  'vcredist140',
+  'pyenv-win'
+)
+foreach ($p in $packages) { choco install $p --no-progress }
 
-# 2) Core tooling via Chocolatey
-choco install -y `
-  temurin17 `       # Amazon-Corretto 17 equivalent
-  git `
-  pyenv-win `       # Python version manager for Windows
-  docker-desktop `
-  visualstudio2022buildtools
+# pyenv-win typical Chocolatey location
+$pyenvRoot = 'C:\tools\pyenv\pyenv-win'
+if (-not (Test-Path $pyenvRoot)) {
+  # fallback for non-choco installs
+  $maybe = Join-Path $env:USERPROFILE '.pyenv\pyenv-win'
+  if (Test-Path $maybe) { $pyenvRoot = $maybe }
+}
+[Environment]::SetEnvironmentVariable('PYENV', $pyenvRoot, 'Machine')
+[Environment]::SetEnvironmentVariable('PYENV_HOME', $pyenvRoot, 'Machine')
+[Environment]::SetEnvironmentVariable('PYENV_ROOT', $pyenvRoot, 'Machine')
+Add-MachinePathSegment "$pyenvRoot\bin"
+Add-MachinePathSegment "$pyenvRoot\shims"
 
-# 3) Start-on-login for Docker & add Jenkins user to docker-users group
-& "C:\Program Files\Docker\Docker\DockerCli.exe" -SwitchDaemon
-If (Get-LocalUser -Name 'Jenkins' -ErrorAction SilentlyContinue) {
-  Add-LocalGroupMember -Group 'docker-users' -Member 'Jenkins'
+# --- Python versions via pyenv-win -------------------------------------------
+# Pin current patch levels; adjust as desired
+$py312 = '3.12.5'
+$py311 = '3.11.9'
+
+pyenv --version | Out-Null
+pyenv update | Out-Null
+
+pyenv install $py312 -s
+pyenv install $py311 -s
+pyenv global  $py312
+pyenv rehash
+
+# --- Pip / Poetry -------------------------------------------------------------
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install "poetry<2.0" poetry-plugin-export
+pyenv rehash
+poetry --version | Write-Host
+poetry self show plugins | Out-Null
+
+# --- (Optional) Visual Studio Build Tools for native extensions --------------
+# Uncomment if your projects compile C/C++ extensions. Leaves a pending reboot.
+# choco install visualstudio2022buildtools --no-progress `
+#   --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --quiet --norestart --locale en-US"
+
+if (Test-PendingReboot) {
+  Write-Warning "A reboot is pending (from installs). Sysprep may fail until reboot is applied."
 }
 
-# 4) Configure pyenv-win (machine-wide)
-#    pyenv-win defaults to %USERPROFILE%\.pyenv but when installed via choco:
-$pyenvRoot = "$Env:LOCALAPPDATA\pyenv\pyenv-win" 
-[Environment]::SetEnvironmentVariable("PYENV","$pyenvRoot",'Machine')
-$machinePath = [Environment]::GetEnvironmentVariable("Path","Machine")
-$newPath = "$machinePath;${pyenvRoot}\bin;${pyenvRoot}\shims"
-[Environment]::SetEnvironmentVariable("Path",$newPath,'Machine')
-$env:Path = $newPath
-
-# 5) Install & activate Python versions
-#    -s: skip download if already present
-pyenv install 3.12.0 -s
-pyenv install 3.11.0 -s
-
-# Set 3.12.0 as global default
-pyenv global 3.12.0
-
-# 6) Upgrade pip, install pipx, ensure it's on PATH
-#    (will apply to whichever Python is currently active)
-Write-Host "Upgrading pip & installing pipx…"
-python -m pip install --upgrade pip pipx
-python -m pipx ensurepath
-
-# 7) Install Poetry and export plugin
-Write-Host "Installing Poetry & export plugin…"
-python -m pip install poetry
-# make sure `poetry` is on PATH
-& poetry --version
-poetry self add poetry-plugin-export
-
-Write-Host "Windows Jenkins agent bootstrap complete!"
-
+Write-Host "Windows Jenkins agent bootstrap complete."
